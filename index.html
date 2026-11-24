@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escáner de códigos</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f4f6f8; color: #1d2330; }
+  header { background: #1f4e79; color: #fff; padding: 14px 16px; font-size: 18px; font-weight: 600; }
+  main { padding: 12px; max-width: 520px; margin: 0 auto; }
+  #reader { width: 100%; background: #000; border-radius: 10px; overflow: hidden; }
+  #reader video { width: 100%; }
+  button { font-size: 17px; padding: 12px; border: 0; border-radius: 10px; cursor: pointer; }
+  button:disabled { opacity: .6; }
+  .btn-main { background: #1f4e79; color: #fff; width: 100%; }
+  .btn-sec { background: #e3e8ee; color: #1d2330; width: 100%; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; font-size: 15px; }
+  input, select, textarea { width: 100%; font-size: 17px; padding: 11px; border: 1px solid #c5ced8; border-radius: 10px; background: #fff; font-family: inherit; }
+  textarea { min-height: 70px; }
+  .hint { font-size: 13px; color: #555; margin: 8px 0 0; }
+  #status { margin-top: 12px; padding: 12px; border-radius: 10px; display: none; font-size: 15px; }
+  .ok { background: #d9f2e0; color: #14532d; }
+  .err { background: #fde2e1; color: #7f1d1d; }
+  .info { background: #e0ecf8; color: #1e3a5f; }
+</style>
+</head>
+<body>
+<header>Escáner de códigos</header>
+<main>
+  <div id="reader"></div>
+  <div class="row">
+    <button class="btn-main" id="btnCam">Activar cámara</button>
+    <button class="btn-sec" id="btnStop" style="display:none">Detener cámara</button>
+  </div>
+  <p class="hint">Apunta al código de barras (EAN-13 o Code 128). También puedes escribirlo a mano.</p>
+
+  <label for="tipo">Tipo</label>
+  <select id="tipo">
+    <option value="Bodega">Bodega</option>
+    <option value="Medidor">Medidor</option>
+  </select>
+
+  <label for="codigo">Código</label>
+  <input id="codigo" autocomplete="off" placeholder="Escanea o escribe el código">
+
+  <label for="formato">Formato</label>
+  <input id="formato" readonly value="Manual">
+
+  <label for="cantidad">Cantidad o lectura</label>
+  <input id="cantidad" inputmode="decimal" placeholder="Ej.: 12 o 1543.7">
+
+  <label for="usuario">Usuario</label>
+  <input id="usuario" placeholder="Tu nombre">
+
+  <label for="notas">Notas</label>
+  <textarea id="notas" placeholder="Opcional"></textarea>
+
+  <div class="row"><button class="btn-main" id="btnSave">Guardar</button></div>
+  <div id="status"></div>
+</main>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  // Configuración del Apps Script (hoja "Escaneos")
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbyUTjdYn9_vAGa29TXplECP-gzCKHuS8wk4UcaaEwycp3dZ6NMSnRyon_WgQ_ipKkgL2w/exec';
+  const TOKEN = 'Xq7vL2mR9pT4wZ8nB3kF6hJ1sD5gA0cY';
+  const HOJA = 'Escaneos';
+
+  const $ = id => document.getElementById(id);
+  let scanner = null;
+  let escaneando = false;
+
+  const usuarioGuardado = localStorage.getItem('usuario');
+  if (usuarioGuardado) $('usuario').value = usuarioGuardado;
+
+  function mostrar(msg, tipo) {
+    const s = $('status');
+    s.textContent = msg;
+    s.className = tipo;
+    s.style.display = 'block';
+  }
+
+  async function iniciarCamara() {
+    if (escaneando) return;
+    if (typeof Html5Qrcode === 'undefined') {
+      mostrar('No se cargó el lector de códigos. Revisa tu conexión y recarga la página.', 'err');
+      return;
+    }
+    try {
+      scanner = new Html5Qrcode('reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.CODE_128],
+        verbose: false
+      });
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 280, height: 140 } },
+        onDecode,
+        () => {}
+      );
+      escaneando = true;
+      $('btnCam').style.display = 'none';
+      $('btnStop').style.display = 'block';
+    } catch (e) {
+      mostrar('No se pudo abrir la cámara. Dale permiso al navegador (en iPhone usa Safari). Detalle: ' + e, 'err');
+    }
+  }
+
+  async function detenerCamara() {
+    if (scanner && escaneando) {
+      try { await scanner.stop(); scanner.clear(); } catch (e) {}
+    }
+    escaneando = false;
+    $('btnCam').style.display = 'block';
+    $('btnStop').style.display = 'none';
+  }
+
+  function onDecode(texto, resultado) {
+    $('codigo').value = texto;
+    const formato = resultado && resultado.result && resultado.result.format
+      ? resultado.result.format.formatName
+      : 'EAN_13 / CODE_128';
+    $('formato').value = formato;
+    if (navigator.vibrate) navigator.vibrate(120);
+    detenerCamara();
+    mostrar('Código leído: ' + texto, 'info');
+    $('cantidad').focus();
+  }
+
+  async function guardar() {
+    const codigo = $('codigo').value.trim();
+    const cantidad = $('cantidad').value.trim();
+    if (!codigo) { mostrar('Falta el código.', 'err'); return; }
+    if (!cantidad) { mostrar('Falta la cantidad o lectura.', 'err'); return; }
+
+    const usuario = $('usuario').value.trim();
+    if (usuario) localStorage.setItem('usuario', usuario);
+
+    const payload = {
+      token: TOKEN,
+      hoja: HOJA,
+      fecha: new Date().toISOString(),
+      tipo: $('tipo').value,
+      codigo: codigo,
+      formato: $('formato').value || 'Manual',
+      cantidad: cantidad,
+      usuario: usuario,
+      notas: $('notas').value.trim()
+    };
+
+    $('btnSave').disabled = true;
+    mostrar('Guardando…', 'info');
+    try {
+      const r = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if (j.ok) {
+        mostrar('Guardado en la hoja ✔', 'ok');
+        $('codigo').value = '';
+        $('formato').value = 'Manual';
+        $('cantidad').value = '';
+        $('notas').value = '';
+      } else {
+        mostrar('El servidor respondió: ' + (j.error || 'error desconocido'), 'err');
+      }
+    } catch (e) {
+      mostrar('No se pudo guardar. Revisa la conexión. Detalle: ' + e, 'err');
+    } finally {
+      $('btnSave').disabled = false;
+    }
+  }
+
+  $('btnCam').addEventListener('click', iniciarCamara);
+  $('btnStop').addEventListener('click', detenerCamara);
+  $('btnSave').addEventListener('click', guardar);
+</script>
+</body>
+</html>
